@@ -1,4 +1,55 @@
-*.STEP filter=lfs diff=lfs merge=lfs -text
-*.stp filter=lfs diff=lfs merge=lfs -text
-*.STEP !text !filter !merge !diff
-*.stp !text !filter !merge !diff
+# ============================================================================
+#  .gitattributes — 行尾符、二进制判定、GitHub 语言统计
+#  说明：本项目曾短暂把 *.STEP 迁入 Git LFS，实测后已撤销。
+#        STEP 是纯文本，git 打包可压缩到约 1/4；改用 LFS 反而使仓库增大约 60MB。
+#        因此 *.STEP 按普通文件存储（见下方的 binary 声明）。
+# ============================================================================
+
+# 统一按内容自动判断文本/二进制；仓库内统一存 LF
+* text=auto
+
+# 明确按文本处理、强制 LF 的源码/配置
+*.c              text eol=lf
+*.h              text eol=lf
+*.cpp            text eol=lf
+*.hpp            text eol=lf
+*.py             text eol=lf
+*.md             text eol=lf
+*.txt            text eol=lf
+*.cmake          text eol=lf
+CMakeLists.txt   text eol=lf
+*.ld             text eol=lf
+*.ioc            text eol=lf
+*.gitignore      text eol=lf
+*.gitattributes  text eol=lf
+
+# Keil 在 Windows 上生成/改写的工程文件，保持原样，不做换行转换
+*.uvprojx   -text
+*.uvoptx    -text
+*.scvd      -text
+*.mxproject -text
+
+# 例外：该文件在历史中的内容是 CRLF，单独豁免换行转换，
+# 否则每次 mtime 变化都会被判定为"整文件改动"
+Code/Lower_Level_Controller/**/RTE_Components.h   -text
+
+# 二进制 / 无需 diff 的文件：禁止 Git 做任何转换或 diff
+*.STEP     binary
+*.stp      binary
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.pdf      binary
+*.chm      binary
+*.xlsx     binary
+*.zip      binary
+*.7z       binary
+*.bin      binary
+*.hex      binary
+*.axf      binary
+*.elf      binary
+
+# GitHub 语言统计：排除第三方库，避免仓库看起来"全是 C"
+Code/Lower_Level_Controller/Drivers/**       linguist-vendored
+Code/Lower_Level_Controller/Middlewares/**   linguist-vendored
