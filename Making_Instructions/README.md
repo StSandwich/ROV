@@ -1,19 +1,21 @@
 # Making Instructions
+
 The waterproof compartment houses the basic circuitry for the submersible's operation, including 1 C-board, 1 I2C expansion board, 1 PWM expansion board, and the connecting wires for them. The waterproof compartment connects to external circuits via cable-passing screw holes on its back, with the connection corresponding to each screw hole as follows:
 
 防水仓内包含了潜器运行的基本电路，包括C板 x1、IIC扩展板 x1、PWM扩展板 x1以及用于连接它们的电线。防水仓通过背部的穿线螺丝孔与外界电路进行连接，其中每个螺丝孔对应的连接为：
 
-![Wire](./Images/337707bc-6bd9-4c74-b155-716a861c906f.png?raw=true)
+![Wire](./Images/337707bc-6bd9-4c74-b155-716a861c906f.png)
 
 ## Electronics
+
 The complete wiring diagram for the robot's internal circuitry is shown below:
 
 机器人内部电路的完整接线图如下：
 
-![Wire_in](./Images/8039e562-dc80-4d54-b2de-2b728531822c.png?raw=true)
-
+![Wire_in](./Images/8039e562-dc80-4d54-b2de-2b728531822c.png)
 
 ### Internal Wiring
+
 C-board to I2C Expansion Board: Pins 2, 4, 6, and 8 of the IIC interface on the C-board are connected to GND, VCC, SCL, and SDA of the input terminal on the I2C expansion board (the side with 5 black base pins arranged in a row), respectively.
 
 C板接IIC扩展板：C板IIC接口的2、4、6、8号分别与IIC扩展板输入端（一侧并排5个黑色底座针脚）的GND、VCC、SCL、SDA相连
@@ -36,11 +38,12 @@ C板接PWM扩展板：C板PWM接口的任意一个5V端口与PWM扩展板输入�
 <img width="1128" height="426" alt="image" src="https://github.com/user-attachments/assets/b2edcb37-1fee-4348-8422-6d7a144375c6" />
 
 ### Inside/Outside Devices Connection
+
 Manual soldering is overly complex due to numerous wirings, so the following terminal blocks are provided for easy wiring.
 
 防水舱内与舱外设备：由于接线数量较多，如果手动焊接会非常复杂，因此配置了如下的接线端子，方便接线。
 
-![Terminal_block](./Images/65a80ee5-c591-4b9c-a4c4-a7b3ef23d753.png?raw=true)
+![Terminal_block](./Images/65a80ee5-c591-4b9c-a4c4-a7b3ef23d753.png)
 
 Power Supply to C-board and Propellers: The external battery is connected to the power input port (No.8) of the internal C-board via a power cable, and any of the power output ports (No.9) on the C-board is connected to the power input ports of the 8 propellers (in parallel) through a terminal block.
 
@@ -52,9 +55,9 @@ C-board to Programmer: The wireless programmer is connected to the host computer
 
 C板接烧写器：无线烧写器连接上位机，用于程序烧写、调试.  舱外无线烧写器连接舱内舱内无线烧写器，通过C板SWD下载线端口，SWCLK、SWDIO、GND、3.3V对应连接
 
-C-board to Serial Port: The UART6 interface of the C‑Board is connected to the host computer via a TTL‑to‑422 module and a 422‑to‑USB module, for command transmission and reception.
+C-board to Serial Port: The UART2 interface of the C‑Board is connected to the host computesion and reception.
 
-C板接串口：C板UART6接口通过TTL转422模块、422转USB模块连接上位机，用于收发指令。
+C板接串口：C板UART2接口通过TTL转422模块、422转USB模块连接上位机，用于收发指令。
 
 Propellers to PWM Expansion Board: The signal input terminals of the 8 external propellers are connected respectively to the PWM terminals (yellow base pins) of Ports 0 to 7 on the output terminal of the internal PWM Expansion Board.
 

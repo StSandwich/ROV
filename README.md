@@ -19,12 +19,12 @@ ROV/
 │   └── Lower_Level_Controller/        # 下位机：STM32F407IGHx（DJI RoboMaster C 板）
 │       ├── CubeMX/                    # STM32CubeMX 工程 + MDK-ARM(Keil) 工程
 │       │   └── MDK-ARM/
-│       ├── Drivers/                   # ST HAL 库 + CMSIS（第三方，不要修改）
-│       ├── Middlewares/               # ST USB Device 库（第三方，不要修改）
+│       ├── Drivers/                   # ST HAL 库 + CMSIS
+│       ├── Middlewares/               # ST USB Device 库
 │       ├── Inc/  Src/                 # CubeMX 自动生成的初始化代码
 │       ├── MDK-ARM/                   # Keil MDK 工程文件
 │       ├── startup/                   # 启动汇编与链接脚本
-│       ├── userCode/                  # ★ 二次开发主要在这里
+│       ├── userCode/                  
 │       │   ├── algorithms/            # 控制 / 姿态解算等算法
 │       │   ├── bsp/                   # 板级支持（CAN、串口、定时器…）
 │       │   ├── devices/               # 器件驱动（电机、舵机、传感器…）
