@@ -9,13 +9,105 @@
 //i2c扩展板接在C板i2c口（上方第二排4根线，左-SDA-SCL-VCC-GND-右）
 //pwm扩展板接在i2c扩展板的0号口
 
+/* -------------------------------------------------------------------------
+ * I2C2 recovery
+ * -------------------------------------------------------------------------
+ * On this vehicle the I2C bus occasionally glitches (a slave NAKs or holds a
+ * line).  The F4 HAL then leaves the handle in HAL_I2C_STATE_BUSY_TX with a
+ * sticky ErrorCode, and because every HAL_I2C_* entry point bails out with
+ * HAL_BUSY unless the handle is READY, the bus stays dead until the MCU is
+ * reset - which silently killed the depth sensor and the PWM expander.
+ *
+ * Recovery is the standard one: hold SDA released, clock SCL nine times so any
+ * slave that is mid-byte finishes and lets go, then emit a STOP and re-init the
+ * peripheral.
+ * 本车 I2C 偶尔会出问题（从机 NAK 或拉住总线）。F4 的 HAL 会把 handle 卡在
+ * BUSY_TX 且 ErrorCode 残留，而 HAL 在 handle 非 READY 时一律直接返回 HAL_BUSY，
+ * 于是总线一直死到复位 —— 这就是水深和 PWM 扩展板时好时坏的原因。
+ * 恢复办法：SDA 放开，SCL 打 9 个脉冲让从机发完当前字节并松手，发一个 STOP，
+ * 再重新初始化外设。
+ */
+void I2C2_Recover(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    HAL_I2C_DeInit(&hi2c2);                 /* 释放 PF0/PF1 */
+
+    gpio.Pin   = GPIO_PIN_0 | GPIO_PIN_1;
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    HAL_GPIO_Init(GPIOF, &gpio);
+
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_0, GPIO_PIN_SET);      /* SDA 放开 */
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_1, GPIO_PIN_SET);
+    for (uint32_t i = 0; i < 1000; ++i) __NOP();
+
+    for (uint8_t i = 0; i < 9; ++i)                          /* 9 个时钟 */
+    {
+        HAL_GPIO_WritePin(GPIOF, GPIO_PIN_1, GPIO_PIN_RESET);
+        for (uint32_t d = 0; d < 60; ++d) __NOP();
+        HAL_GPIO_WritePin(GPIOF, GPIO_PIN_1, GPIO_PIN_SET);
+        for (uint32_t d = 0; d < 60; ++d) __NOP();
+    }
+
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_0, GPIO_PIN_RESET);    /* STOP */
+    for (uint32_t d = 0; d < 60; ++d) __NOP();
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_1, GPIO_PIN_SET);
+    for (uint32_t d = 0; d < 60; ++d) __NOP();
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_0, GPIO_PIN_SET);
+    for (uint32_t d = 0; d < 100; ++d) __NOP();
+
+    MX_I2C2_Init();                          /* 重新配置外设和引脚 */
+}
+
+/* Counters so the failure rate can be watched over SWD.
+ * 计数器，方便用 SWD 观察出错频率。 */
+volatile uint32_t I2C2_ErrorCount   = 0;
+volatile uint32_t I2C2_RecoverCount = 0;
+/* 分开计数, 用来看是 TCA9548A 还是 PCA9685 在出错 */
+volatile uint32_t TCA_ErrorCount = 0;
+volatile uint32_t PCA_ErrorCount = 0;
+
+/* Called before an expander access.  HAL_I2C_* clears ErrorCode when it starts a
+ * transfer and sets it when the transfer fails, so a non-zero ErrorCode here
+ * means the *previous* transfer went wrong - that is the moment to un-wedge the
+ * bus.  Rate-limited so a permanently broken bus cannot dominate the loop.
+ * 之前那条判据（State != READY && Mode == NONE）会在每次调用都成立，因为 HAL
+ * 出错后 State 一直留在 BUSY_TX，结果每笔访问前都做一次恢复，反而把总线搞乱。
+ * 现在改成看 ErrorCode（HAL 每次开始传输会清零、失败时置位），并限流。 */
+void I2C2_RecoverIfWedged(void)
+{
+    static uint32_t last = 0;
+    uint32_t now = HAL_GetTick();
+
+    if (hi2c2.ErrorCode == HAL_I2C_ERROR_NONE)
+    {
+        return;
+    }
+    hi2c2.ErrorCode = HAL_I2C_ERROR_NONE;
+    I2C2_ErrorCount++;
+    if (now - last < 100U)          /* 最多每 100ms 恢复一次 */
+    {
+        return;
+    }
+    last = now;
+    I2C2_RecoverCount++;
+    I2C2_Recover();
+}
+
 // Enable the I2C bus on `channel`.
 // 开通第 channel 路的I2C 
 void TCA_SetChannel(uint8_t channel)
 {
     uint8_t data;
+    I2C2_RecoverIfWedged();
     data = 0x01 << channel;
-    HAL_I2C_Master_Transmit(&hi2c2, (TCA9548A_ADDR << 1) | 0x01, &data, 1, 0xffff);
+    if (HAL_I2C_Master_Transmit(&hi2c2, (TCA9548A_ADDR << 1) | 0x01, &data, 1,
+                                EXPANDER_I2C_TIMEOUT) != HAL_OK)
+    {
+        TCA_ErrorCount++;
+    }
     //HAL_I2C_Master_Transmit(&hi2c2, TCA9548A_ADDR, &data, 1, 0xffff);
 }
 
@@ -26,19 +118,28 @@ uint8_t PCA_Read(uint8_t startAddress)
     uint8_t tx[1];
     uint8_t buffer[1];
     tx[0] = startAddress;
-    HAL_I2C_Master_Transmit(&hi2c2,PCA9685_ADDR,tx,1,10000);
-    HAL_I2C_Master_Receive(&hi2c2,PCA9685_ADDR,buffer,1,10000);
+    HAL_I2C_Master_Transmit(&hi2c2,PCA9685_ADDR,tx,1,EXPANDER_I2C_TIMEOUT);
+    HAL_I2C_Master_Receive(&hi2c2,PCA9685_ADDR,buffer,1,EXPANDER_I2C_TIMEOUT);
     return buffer[0];
 }
 
 void PCA_Write(uint8_t startAddress, uint8_t buffer)
 {
+    I2C2_RecoverIfWedged();
 		// Set the register address from which data reading starts.
     //设置开始读取数据的寄存器地址
     uint8_t tx[2];
     tx[0] = startAddress;
     tx[1] = buffer;
-    HAL_I2C_Master_Transmit(&hi2c2,PCA9685_ADDR, tx,2,10000); // Use the HAL I2C communication function to write the value to the register address. //利用HAL库的I2C通讯函数对寄存器地址写值
+    for (uint8_t k = 0; k < 3; ++k)          /* 三写两重试：这条总线上单次失败很常见 */
+    {
+        if (HAL_I2C_Master_Transmit(&hi2c2, PCA9685_ADDR, tx, 2,
+                                    EXPANDER_I2C_TIMEOUT) == HAL_OK)
+        {
+            return;
+        }
+    }
+    PCA_ErrorCount++;
 }
 
 // Set the PWM frequency to `freq`.

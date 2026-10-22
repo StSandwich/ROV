@@ -78,23 +78,45 @@ void Servo::Handle()
 void Servo_I2C::Handle()
 {
     // if(tim_id == 10){
-    TCA_SetChannel(4);
-
     bool flag_range = true;
     for (int i = 0; i < SERVO_NUM; ++i)
     {
         if (data[i] < 500 || data[i] > 2500)
             flag_range = false;
     }
-    if (flag_range)
+    if (!flag_range)
     {
-        for (int i = 0; i < SERVO_NUM; ++i)
-        {
-            PCA_Setpwm(ID[i], 0, floor(data[i] * 4096 / 20000 + 0.5f));
-        }
+        return;
     }
 
-    //}
+    /* Same optimisation as the thrusters: the servo PWM only has to be sent
+     * when the angle changes.  与推进器同理：舵机 PWM 只在角度变化时下发。 */
+    static int32_t written[SERVO_NUM] = {-1, -1, -1, -1};
+    int32_t duty_count[SERVO_NUM];
+    bool changed = false;
+
+    for (int i = 0; i < SERVO_NUM; ++i)
+    {
+        duty_count[i] = (int32_t)floor(data[i] * 4096 / 20000 + 0.5f);
+        if (duty_count[i] != written[i])
+        {
+            changed = true;
+        }
+    }
+    if (!changed)
+    {
+        return;
+    }
+
+    TCA_SetChannel(4);
+    for (int i = 0; i < SERVO_NUM; ++i)
+    {
+        if (duty_count[i] != written[i])
+        {
+            PCA_Setpwm(ID[i], 0, duty_count[i]);
+            written[i] = duty_count[i];
+        }
+    }
 }
 
 void Servo::data_extract(uint8_t *rx, int32_t *data, int32_t num)

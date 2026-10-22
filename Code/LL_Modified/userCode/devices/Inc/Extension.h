@@ -22,6 +22,11 @@
 
 #define PCA9685_ADDR 0x80
 
+/* I2C timeout for the expander boards, in ms.  These used to be 10000 / 65535,
+ * so a single stuck bus froze the 300 Hz main loop for tens of seconds
+ * (Handle() blocks on every PCA register write).  5 ms is ample at 42 MHz. */
+#define EXPANDER_I2C_TIMEOUT 5
+
 #define PCA9685_MODE1 0x0
 #define PCA9685_PRESCALE 0xFE
 
@@ -37,6 +42,11 @@ extern uint8_t RxBuffer_servo[];
 
 extern void I2C_Extension_init();
 extern void I2C_Extension();*/
+
+/* Recover a wedged I2C2 bus (see Extension.cpp).  Called automatically before
+ * every expander access, and by the pressure-sensor driver each cycle. */
+void I2C2_Recover(void);
+void I2C2_RecoverIfWedged(void);
 
 extern void TCA_SetChannel(uint8_t channel);
 extern void PCA_Setpwm(uint8_t num, uint32_t on, uint32_t off);

@@ -111,7 +111,58 @@ public:
 
 void send_float(float value, uint8_t decimalPlaces, bool endSign);
 
-void send_int(int value, bool endSign);
+/* NOTE: int32_t, not int - on ARM `int` and `int32_t` (long int) are different
+ * types, and the definition in Usermain.cpp takes an int32_t.  Declaring it as
+ * `int` here would create a second, never-defined overload. */
+void send_int(int32_t value, bool endSign);
+
+/* ---------------------------------------------------------------------------
+ * 422 telemetry: what the periodic stream sends back to the upper computer.
+ * 422 遥测：周期性回传的内容，可用串口命令 OUT:<what> 选择。
+ *
+ * Select it at runtime by sending  "OUT:<what>"  on the 422 link.  Each frame
+ * is one text line, always "<NAME>,<v0>,<v1>,...\n":
+ *
+ *   OUT:PS     PS,<p0>,<p1>,<p2>,<p3>,<k0>,<k1>,<k2>,<k3>
+ *                                                    4x pressure (offset removed)
+ *                                                    + 1/0 = gauge present
+ *   OUT:RPY    RPY,<yaw>,<pitch>,<roll>           [deg]
+ *   OUT:GYRO   GYRO,<gx>,<gy>,<gz>                [rad/s]
+ *   OUT:ACC    ACC,<ax>,<ay>,<az>                 [m/s^2]
+ *   OUT:MAG    MAG,<mx>,<my>,<mz>,<rx>,<ry>,<rz>  [uT] calibrated, then raw
+ *   OUT:TEMP   TEMP,<temp>                        [degC] IMU temperature
+ *   OUT:ALL    all of the above lines, at ~10 Hz
+ *   OUT:PCA    PCA,<MODE1>,<PRESCALE>,<off8>,<off9>,<off10>,<off11>
+ *              reads registers back out of the PWM expander - use it to
+ *              check the board really received the servo/thruster values /
+ *              回读 PWM 扩展板的寄存器, 用来确认舵机/推进器的值真的写进去了
+ *   OUT:OFF    stop the stream
+ *   OUT        just report the current selection (e.g. "OUT:GYRO")
+ *
+ * TELEMETRY_PS is the default and reproduces the original behaviour (the four
+ * pressure readings, one frame per IMU DMA cycle).
+ * TELEMETRY_PS 为默认值，即原来的行为（每个 IMU DMA 周期发 4 路水压）。
+ * --------------------------------------------------------------------------- */
+typedef enum {
+    TELEMETRY_PS = 0,   /* default / 默认 */
+    TELEMETRY_RPY,
+    TELEMETRY_GYRO,
+    TELEMETRY_ACC,
+    TELEMETRY_MAG,
+    TELEMETRY_TEMP,
+    TELEMETRY_ALL,
+    TELEMETRY_PCA,   /* read the PCA9685 back / 回读 PWM 扩展板 */
+    TELEMETRY_OFF,
+} TELEMETRY_E;
+
+extern volatile uint8_t telemetry_mode;
+
+/* Handle an "OUT:..." command from the upper computer.
+ * Returns true when the buffer was ours (so nobody else has to look at it). */
+bool telemetry_parse(const uint8_t *cmd);
+
+/* Emit one telemetry frame (called from the IMU DMA handler). */
+void telemetry_send(void);
 
 /*结构体成员取值定义组------------------------------------------------------*/
 /*外部变量声明-------------------------------------------------------------*/

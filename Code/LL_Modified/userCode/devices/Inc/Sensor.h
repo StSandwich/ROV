@@ -14,6 +14,12 @@
 
 #define B02_IIC_ADDRESS 0xEC
 
+/* Timeout (ms) for the periodic pressure transfers.  This used to be 1 ms, but
+ * HAL_GetTick() only has 1 ms resolution, so the timeout fired on a coin flip
+ * and the (unchecked) failure left stale bytes in `temp` - which is what made
+ * channels report wild values.  5 ms comfortably covers a 3-byte read. */
+#define MS5837_I2C_TIMEOUT 5
+
 #define MS5837_30BA_ResetCommand     0x1E                //��λ
 #define	MS5837_30BA_PROM_RD 	       0xA0                //PROM��ȡ,{0XA0,0XA2,0XA4,0XA8,0XAA,0XAC,0XAE}
 #define MS5837_30BA_ADC_RD           0x00                //ADC��ȡ
@@ -123,6 +129,22 @@ public:
     float pitch,roll; // 俯仰角、横滚角
     bool flag_calibrate; // 校准水压计零偏的标志
     bool flag_read_pres; // 读取水压计读数的标志
+
+    /* Is sensor `id` present with a valid PROM CRC?
+     * Without this the caller sees an uninitialised data_pressure[] entry for a
+     * missing sensor, which is impossible to tell apart from a real reading.
+     * 该水压计是否存在且 PROM 校验通过。否则缺失的传感器会让 data_pressure[]
+     * 保留未初始化的值，根本分不清是真实读数还是垃圾。 */
+    bool is_ok(int id) const
+    {
+        /* CRC4 alone is not enough: an all-zero PROM (the gauge never answered
+         * and the I2C read returned zeros) also satisfies it.  C0 is never 0 on
+         * a real MS5837 - MS5837_30BA_PROM() uses exactly that as its error
+         * indicator - so require it too.
+         * 只查 CRC 不够：PROM 全 0（传感器没应答/I2C 读回全 0）也能通过 CRC。
+         * 真实 MS5837 的 C0 不会为 0，而 MS5837_30BA_PROM() 本身就是用 C0 判错的。 */
+        return (id >= 0) && (id < SENSOR_NUM) && (flag_ok[id] != 0) && (Cal_C[id][0] != 0);
+    }
 
     //uint8_t flag_Busy;
     static PressureSensor pressure_sensor;

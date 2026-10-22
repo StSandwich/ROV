@@ -10,6 +10,47 @@ KalmanFilter Pressure_Kf[4] = {KalmanFilter(0.01, 0.05, 1.0, 0.0),
                                KalmanFilter(0.01, 0.05, 1.0, 0.0),
                                KalmanFilter(0.01, 0.05, 1.0, 0.0)};
 
+/* ---------------------------------------------------------------------------
+ * I2C helpers with retries.
+ * The gauges share I2C2 with the PWM expander and this bus glitches often
+ * enough that a single-shot transfer fails a large fraction of the time (a
+ * measured conversion[] showed two channels never getting a reading at all).
+ * Three attempts with a bus recovery in between fixes that in practice.
+ * 带重试的 I2C 收发：本车这条 I2C 经常出错，单次尝试有很大比例失败
+ * （实测有两个通道一次都没读成功过）。重试 3 次，中间做一次总线恢复。
+ * --------------------------------------------------------------------------- */
+#define PS_I2C_RETRIES 3
+
+static HAL_StatusTypeDef ps_tx(uint16_t dev, uint8_t *buf, uint16_t n)
+{
+    HAL_StatusTypeDef st = HAL_ERROR;
+    for (uint8_t k = 0; k < PS_I2C_RETRIES; ++k)
+    {
+        st = HAL_I2C_Master_Transmit(&hi2c2, dev, buf, n, MS5837_I2C_TIMEOUT);
+        if (st == HAL_OK)
+        {
+            return st;
+        }
+        I2C2_Recover();
+    }
+    return st;
+}
+
+static HAL_StatusTypeDef ps_rx(uint16_t dev, uint8_t *buf, uint16_t n)
+{
+    HAL_StatusTypeDef st = HAL_ERROR;
+    for (uint8_t k = 0; k < PS_I2C_RETRIES; ++k)
+    {
+        st = HAL_I2C_Master_Receive(&hi2c2, dev, buf, n, MS5837_I2C_TIMEOUT);
+        if (st == HAL_OK)
+        {
+            return st;
+        }
+        I2C2_Recover();
+    }
+    return st;
+}
+
 void PressureSensor::Init()
 {
 
@@ -58,6 +99,11 @@ void PressureSensor::Handle()
 {
     // if(tim_id == 1){
     // flag_Busy = 1;
+
+    /* The gauges share the bus with the PWM expander; if a transfer glitched we
+     * have to un-wedge the peripheral or every later read silently fails.
+     * 水压计和 PWM 扩展板共用 I2C，总线卡住后必须先恢复，否则之后每次读都失败。 */
+    I2C2_RecoverIfWedged();
 
     if (flag_calibrate)
     {
@@ -146,7 +192,7 @@ void PressureSensor::MS5837_30BA_ReSet(void)
 {
     uint8_t data[1];
     data[0] = MS5837_30BA_ResetCommand;
-    HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, data, 1, 0xffff);
+    ps_tx(B02_IIC_ADDRESS, data, 1);
 }
 
 uint8_t PressureSensor::MS5837_30BA_PROM(int id)
@@ -160,8 +206,8 @@ uint8_t PressureSensor::MS5837_30BA_PROM(int id)
     for (i = 0; i < 7; i++)
     {
         memaddr[0] = MS5837_30BA_PROM_RD + (i * 2);
-        HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, memaddr, 1, 0xffff);
-        HAL_I2C_Master_Receive(&hi2c2, B02_IIC_ADDRESS, data, 2, 0xffff);
+        ps_tx(B02_IIC_ADDRESS, memaddr, 1);
+        ps_rx(B02_IIC_ADDRESS, data, 2);
         Cal_C[id][i] = (((uint16_t)data[0] << 8) | data[1]);
     }
     return !Cal_C[id][0];
@@ -172,12 +218,12 @@ unsigned long PressureSensor::MS5837_30BA_GetConversion(uint8_t command)
     unsigned long conversion = 0;
     uint8_t data = MS5837_30BA_ADC_RD;
     uint8_t temp[3];
-    HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &command, 1, 0xffff);
+    ps_tx(B02_IIC_ADDRESS, &command, 1);
     HAL_Delay(2);
     // Delay_us(15000);
-    HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &data, 1, 0xffff);
+    ps_tx(B02_IIC_ADDRESS, &data, 1);
 
-    HAL_I2C_Master_Receive(&hi2c2, B02_IIC_ADDRESS, temp, 3, 0xffff);
+    ps_rx(B02_IIC_ADDRESS, temp, 3);
     conversion = (unsigned long)temp[0] * 65536 + (unsigned long)temp[1] * 256 + (unsigned long)temp[2];
     return conversion;
 }
@@ -406,6 +452,8 @@ void PressureSensor::Handle_all()
     static float tmp_pres;
     static unsigned long conversion[8];    // The upper four bits of `conversion` store temperature data, and the lower four bits store pressure information. //conversion的前四位存储温度数据，后四位存储水压信息
 
+    static uint8_t conv_ok[2 * SENSOR_NUM] = {0};   /* did each transfer succeed? */
+
     switch (ps_state) {
         case PS_HANDLE_STATE::GET_TEMPERATURE:
             // Notify the sensor to prepare temperature data.
@@ -413,7 +461,7 @@ void PressureSensor::Handle_all()
             for (int i = 0; i < SENSOR_NUM; ++i)
             {
                 TCA_SetChannel(i);
-                HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &command_tmp, 1, 1);
+                conv_ok[i] = (ps_tx(B02_IIC_ADDRESS, &command_tmp, 1) == HAL_OK);
             }
             ps_state = PS_HANDLE_STATE::GET_PRESSURE;
             break;
@@ -424,9 +472,16 @@ void PressureSensor::Handle_all()
             for (int i = 0; i < SENSOR_NUM; ++i)
             {
                 TCA_SetChannel(i);
-                HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &data, 1, 1);
-                HAL_I2C_Master_Receive(&hi2c2, B02_IIC_ADDRESS, temp, 3, 1);
-                conversion[i] = (unsigned long)temp[0] * 65536 + (unsigned long)temp[1] * 256 + (unsigned long)temp[2];
+                if (ps_tx(B02_IIC_ADDRESS, &data, 1) == HAL_OK &&
+                    ps_rx(B02_IIC_ADDRESS, temp, 3) == HAL_OK)
+                {
+                    conversion[i] = (unsigned long)temp[0] * 65536 +
+                                    (unsigned long)temp[1] * 256 + (unsigned long)temp[2];
+                }
+                else
+                {
+                    conv_ok[i] = 0;      /* keep the old value, but flag it */
+                }
             }
 
 						// Notify the sensor to prepare pressure data.
@@ -434,7 +489,10 @@ void PressureSensor::Handle_all()
             for (int i = 0; i < SENSOR_NUM; ++i)
             {
                 TCA_SetChannel(i);
-                HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &command_pres, 1, 1);
+                if (ps_tx(B02_IIC_ADDRESS, &command_pres, 1) != HAL_OK)
+                {
+                    conv_ok[i + 4] = 0;
+                }
             }
             ps_state = PS_HANDLE_STATE::CALCULATE;
             break;
@@ -445,14 +503,25 @@ void PressureSensor::Handle_all()
             for (int i = 0; i < SENSOR_NUM; ++i)
             {
                 TCA_SetChannel(i);
-                HAL_I2C_Master_Transmit(&hi2c2, B02_IIC_ADDRESS, &data, 1, 1);
-                HAL_I2C_Master_Receive(&hi2c2, B02_IIC_ADDRESS, temp, 3, 1);
-                conversion[i+4] = (unsigned long)temp[0] * 65536 + (unsigned long)temp[1] * 256 + (unsigned long)temp[2];
+                if (ps_tx(B02_IIC_ADDRESS, &data, 1) == HAL_OK &&
+                    ps_rx(B02_IIC_ADDRESS, temp, 3) == HAL_OK)
+                {
+                    conversion[i + 4] = (unsigned long)temp[0] * 65536 +
+                                        (unsigned long)temp[1] * 256 + (unsigned long)temp[2];
+                }
+                else
+                {
+                    conv_ok[i + 4] = 0;
+                }
             }
 
 						// Refer to `float PressureSensor::MS5837_30BA_GetData(int id)` to compute the four raw pressure values.
             // 参考float PressureSensor::MS5837_30BA_GetData(int id)计算四个原始压强
-            float pressure[4];
+            /* zero-initialised: `flag_ok[i]` false used to leave pressure[i]
+             * uninitialised, so a missing gauge produced garbage in
+             * data_pressure[] / data_depth.  未初始化的 pressure[] 会让缺失的
+             * 水压计输出垃圾值，这里清零。 */
+            float pressure[4] = {0};
             for (int i = 0; i < SENSOR_NUM; ++i)
             {
                 if (flag_ok[i])
@@ -489,6 +558,13 @@ void PressureSensor::Handle_all()
         // 把原始压强赋值给data_pressure_raw，计算后给data_pressure赋值
         for (int i = 0; i < SENSOR_NUM; ++i)
         {
+            if (!conv_ok[i] || !conv_ok[i + 4])
+            {
+                /* A transfer failed - do NOT recompute from stale bytes, just keep
+                 * the previous filtered value.  传输失败时不要用旧字节重算。 */
+                conv_ok[i] = conv_ok[i + 4] = 1;   /* re-arm for the next round */
+                continue;
+            }
             data_pressure_raw[i] = pressure[i];
             tmp_pres = data_pressure_raw[i] - data_pressure_offset[i];
             tmp_pres = Pressure_Kf[i].update(tmp_pres); // First-order low-pass filtering. // 一阶低通滤波

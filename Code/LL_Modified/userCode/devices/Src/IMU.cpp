@@ -177,22 +177,13 @@ void IMU::DMA_IT_Handle()
             get_angle(pro_data.ins_quat, pro_data.ins_angle, pro_data.ins_angle+1, pro_data.ins_angle+2);    // Compute Euler angles (in radians) from the quaternion, and update them in-place in the `INS_angle` array. //对四元数计算得到弧度制欧拉角，直接在INS_angle数组中更新
             attitude_update();
             
-						// Output test
-						// 测试输出
-            if (PressureSensor::pressure_sensor.ps_state == PS_HANDLE_STATE::CALCULATE)
-            {
-            // send_float(pro_data.ins_angle[0]*180/PI, 2, 0);
-            // send_float(pro_data.ins_angle[1]*180/PI, 2, 0);
-            // send_float(pro_data.ins_angle[2]*180/PI, 2, 1);
-            // send_float(pro_data.accel[0], 2, 0);
-            // send_float(pro_data.accel[1], 2, 0);
-            // send_float(pro_data.accel[2], 2, 1);
-							for(int i=0; i<3;i++)
-							 {
-									 send_float(PressureSensor::pressure_sensor.data_pressure[i], 2, 0);
-							 }
-							 send_float(PressureSensor::pressure_sensor.data_pressure[3], 2, 1);
-            }
+						// NOTE: telemetry used to be sent from here.  That coupled the
+						// depth stream to the IMU DMA chain: whenever the SPI/DMA chain
+						// stalled, the pressure output silently stopped too, which made
+						// it look like the depth sensor had died.  It is now emitted
+						// from the main loop (Usermain.cpp) instead.
+						// 遥测以前在这里发，等于把水深数据和 IMU 的 DMA 链绑在一起：
+						// IMU 链一卡，水深输出就跟着没了。现在改到主循环里发。
             dma_state = IMU_DMA_IDLE;
             break;
         }

@@ -1,8 +1,29 @@
 # ============================================================================
-#  .gitattributes — 行尾符、二进制判定、GitHub 语言统计
-#  说明：本项目曾短暂把 *.STEP 迁入 Git LFS，实测后已撤销。
-#        STEP 是纯文本，git 打包可压缩到约 1/4；改用 LFS 反而使仓库增大约 60MB。
-#        因此 *.STEP 按普通文件存储（见下方的 binary 声明）。
+#  .gitattributes — 行尾符、Git LFS、二进制判定、GitHub 语言统计
+#
+#  ── Git LFS 说明 ──────────────────────────────────────────────────────────
+#  *.STEP / *.STP / *.stp / *.SLDPRT / *.sldprt 由 Git LFS 管理。
+#
+#  ⚠ 三点务必知道：
+#   1. LFS 不做压缩，而 STEP 是纯文本。
+#      仓库里已有的 STEP 模型去重后约 80MB，放在普通 git 对象里打包后
+#      仅约 20MB；改用 LFS 会按 80MB 原样存储，仓库总体积因此增大约 60MB。
+#      换来的好处是：不再触发 GitHub 单文件 100MB 上限，并可用
+#      GIT_LFS_SKIP_SMUDGE=1 git clone 只拿代码、按需再拉模型。
+#      （对 *.SLDPRT 这类本身就压不动、且每次保存整份重写的大二进制，
+#        LFS 是更合适的选择，没有这个问题。）
+#   2. GitHub 免费额度为 1GB 存储 + 1GB/月流量，每次完整 clone 会消耗
+#      相当于模型总体积的流量，注意别超额。
+#   3. .gitattributes 必须与第一个 LFS 文件一起提交。若只提交了 LFS 指针
+#      而没提交本文件，别人克隆时会得到一个 133 字节的指针文本，
+#      且 git 不知道该怎么还原它。
+#
+#  克隆本仓库前请先安装 git-lfs 并执行 `git lfs install`，否则拿到的
+#  可能是指针文件（133 字节的文本），而不是真正的三维模型。
+#
+#  把【已有】文件改由 LFS 管理请用：
+#      git lfs migrate import --include="*.STEP,*.STP,*.stp,*.SLDPRT,*.sldprt"
+#  这是重写历史的操作，之后需要 force push。
 # ============================================================================
 
 # 统一按内容自动判断文本/二进制；仓库内统一存 LF
@@ -33,9 +54,14 @@ CMakeLists.txt   text eol=lf
 # 否则每次 mtime 变化都会被判定为"整文件改动"
 Code/Lower_Level_Controller/**/RTE_Components.h   -text
 
+# ---- Git LFS：三维模型 / CAD ----
+*.STEP    filter=lfs diff=lfs merge=lfs -text
+*.STP     filter=lfs diff=lfs merge=lfs -text
+*.stp     filter=lfs diff=lfs merge=lfs -text
+*.SLDPRT  filter=lfs diff=lfs merge=lfs -text
+*.sldprt  filter=lfs diff=lfs merge=lfs -text
+
 # 二进制 / 无需 diff 的文件：禁止 Git 做任何转换或 diff
-*.STEP     binary
-*.stp      binary
 *.png      binary
 *.jpg      binary
 *.jpeg     binary

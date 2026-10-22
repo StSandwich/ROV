@@ -7,6 +7,30 @@
 > maintained independently by [@StSandwich](https://github.com/StSandwich).
 > It is no longer kept in sync with the upstream repository.
 
+## 
+
+#### 已完成改动
+
+- 移植下位机至GCC环境（成功）
+
+- 所有机械结构改用3d打印，使用螺丝螺母连接
+
+- 穿线端子换成插拔式，摒弃环氧树脂连接（待验证）
+
+#### 计划
+
+- 测试防水
+
+- 测试姿态控制
+
+- 新增机械臂
+
+
+
+
+
+
+
 ## 仓库结构 / Repository Structure
 
 ```text

@@ -83,6 +83,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t datasize)//HAL_UART_RxCpltCallback
 {
     if(huart->Instance==USART1) {
+        // Telemetry selection ("OUT:<what>") belongs to no device - handle it
+        // first, while RxBuffer is still intact (a device may strtok() it).
+        // 遥测选择命令不属于任何一个器件，先处理，此时 RxBuffer 还没被破坏
+        telemetry_parse(RxBuffer);
         // if (datasize >= 2){
             // if (strncmp((char *)RxBuffer, "IM", 2) == 0)
             //     device[0]->Receive();
@@ -254,7 +258,19 @@ int main(void)
 //                    time_start = HAL_GetTick();
 //                }
             }
-            
+
+            /* Periodic telemetry, emitted from the main loop (~100 Hz) and NOT
+             * from the IMU DMA ISR any more - see the note in IMU.cpp.  The SPI
+             * DMA chain can stall; when the output lived there, the depth stream
+             * died with it and looked like a dead sensor.
+             * 遥测改到主循环发（约 100Hz）。以前挂在 IMU 的 DMA 中断上，
+             * IMU 链一卡水深就一起停了。 */
+            static uint8_t tele_div = 0;
+            if (++tele_div >= 3)
+            {
+                tele_div = 0;
+                telemetry_send();
+            }
         }
     }
 }
@@ -333,4 +349,161 @@ void send_int(int32_t value, bool endSign){
     buffer_int[len] = '\0';
     // HAL_UART_Transmit(&huart6, (uint8_t *)buffer, len, 0x00ff);
     UARTBaseLite<1>::GetInstance().Transmit(reinterpret_cast<uint8_t *>(buffer_int),len);
+}
+/* ---------------------------------------------------------------------------
+ * 422 telemetry - see Usermain.h for the wire format.
+ * --------------------------------------------------------------------------- */
+volatile uint8_t telemetry_mode = TELEMETRY_PS;
+
+static const struct { const char *name; uint8_t mode; } telemetry_table[] = {
+    {"PS",   TELEMETRY_PS},
+    {"RPY",  TELEMETRY_RPY},
+    {"GYRO", TELEMETRY_GYRO},
+    {"ACC",  TELEMETRY_ACC},
+    {"MAG",  TELEMETRY_MAG},
+    {"TEMP", TELEMETRY_TEMP},
+    {"ALL",  TELEMETRY_ALL},
+    {"PCA",  TELEMETRY_PCA},
+    {"OFF",  TELEMETRY_OFF},
+};
+#define TELEMETRY_TABLE_NUM (sizeof(telemetry_table) / sizeof(telemetry_table[0]))
+
+/* Raw text into the 422 tx queue (send_float()/send_int() only do numbers). */
+static void telemetry_write(const char *text)
+{
+    UARTBaseLite<1>::GetInstance().Transmit(
+        reinterpret_cast<uint8_t *>(const_cast<char *>(text)),
+        (uint16_t)strlen(text));
+}
+
+/* "<name>,v0,v1,...\n" - send_float() already appends ',' or '\n'. */
+static void telemetry_line(const char *name, const float *v, uint8_t n, uint8_t dec)
+{
+    telemetry_write(name);
+    for (uint8_t i = 0; i < n; ++i)
+        send_float(v[i], dec, (i == (uint8_t)(n - 1)));
+}
+
+bool telemetry_parse(const uint8_t *cmd)
+{
+    if (strncmp((const char *)cmd, "OUT", 3) != 0)
+        return false;
+
+    /* "OUT" alone: report what is selected right now. */
+    if (((const char *)cmd)[3] != ':')
+    {
+        for (uint32_t i = 0; i < TELEMETRY_TABLE_NUM; ++i)
+        {
+            if (telemetry_table[i].mode == telemetry_mode)
+            {
+                telemetry_write("OUT:");
+                telemetry_write(telemetry_table[i].name);
+                telemetry_write("\n");
+                break;
+            }
+        }
+        return true;
+    }
+
+    const char *what = (const char *)cmd + 4;
+    for (uint32_t i = 0; i < TELEMETRY_TABLE_NUM; ++i)
+    {
+        if (strncmp(what, telemetry_table[i].name, strlen(telemetry_table[i].name)) == 0)
+        {
+            telemetry_mode = telemetry_table[i].mode;
+            /* Acknowledge so the upper computer knows it took effect. */
+            telemetry_write("OUT:");
+            telemetry_write(telemetry_table[i].name);
+            telemetry_write("\n");
+            return true;
+        }
+    }
+    return false;
+}
+
+void telemetry_send(void)
+{
+    static uint8_t divider = 0;
+    uint8_t mode = telemetry_mode;
+
+    if (mode == TELEMETRY_OFF)
+        return;
+
+    if (mode == TELEMETRY_ALL)
+    {
+        /* The full frame is ~150 bytes - send it at ~10 Hz, not 100 Hz. */
+        if (++divider < 10)
+            return;
+        divider = 0;
+    }
+
+    bool all = (mode == TELEMETRY_ALL);
+    float v[6];
+
+    if (all || mode == TELEMETRY_PS)
+    {
+        /* PS,<p0..p3>,<ok0..ok3> - the flags say which gauge answered its
+         * PROM read, i.e. which reading can be trusted.  PS,<压强x4>,<在位x4> */
+        telemetry_write("PS,");
+        for (int i = 0; i < SENSOR_NUM; ++i)
+            send_float(PressureSensor::pressure_sensor.data_pressure[i], 2, false);
+        for (int i = 0; i < SENSOR_NUM; ++i)
+            send_int(PressureSensor::pressure_sensor.is_ok(i) ? 1 : 0,
+                     (i == (SENSOR_NUM - 1)));
+    }
+
+    if (all || mode == TELEMETRY_RPY)
+    {
+        for (int i = 0; i < 3; ++i)
+            v[i] = IMU::imu.pro_data.ins_angle[i] * 180.0f / PI;
+        telemetry_line("RPY,", v, 3, 2);
+    }
+
+    if (all || mode == TELEMETRY_GYRO)
+    {
+        for (int i = 0; i < 3; ++i)
+            v[i] = IMU::imu.pro_data.gyro[i];
+        telemetry_line("GYRO,", v, 3, 4);
+    }
+
+    if (all || mode == TELEMETRY_ACC)
+    {
+        for (int i = 0; i < 3; ++i)
+            v[i] = IMU::imu.pro_data.accel[i];
+        telemetry_line("ACC,", v, 3, 4);
+    }
+
+    if (all || mode == TELEMETRY_MAG)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            v[i]     = IMU::imu.pro_data.mag[i];   /* calibrated / 校准后 */
+            v[i + 3] = IMU::imu.raw_data.mag[i];   /* raw / 原始 */
+        }
+        telemetry_line("MAG,", v, 6, 3);
+    }
+
+    if (all || mode == TELEMETRY_TEMP)
+    {
+        v[0] = IMU::imu.raw_data.temp;
+        telemetry_line("TEMP,", v, 1, 2);
+    }
+
+    if (mode == TELEMETRY_PCA)
+    {
+        /* Read the PWM expander back: if the servos do not move, this says
+         * whether the PCA9685 ever received the values.  Motor/servo channels
+         * are 0-7 and 8-11.
+         * 回读 PWM 扩展板：舵机不动时，用它判断 PCA9685 到底有没有收到数值。 */
+        TCA_SetChannel(4);
+        v[0] = (float)PCA_Read(PCA9685_MODE1);
+        v[1] = (float)PCA_Read(PCA9685_PRESCALE);
+        for (int i = 0; i < 4; ++i)
+        {
+            uint8_t lo = PCA_Read(LED0_OFF_L + 4 * (8 + i));
+            uint8_t hi = PCA_Read(LED0_OFF_H + 4 * (8 + i));
+            v[2 + i] = (float)(((uint16_t)hi << 8) | lo);
+        }
+        telemetry_line("PCA,", v, 6, 0);
+    }
 }
